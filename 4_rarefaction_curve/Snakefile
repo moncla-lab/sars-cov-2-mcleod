@@ -1,0 +1,542 @@
+"""This file specifies the entire pipeline that will be run, with
+specific parameters for subsampling, tree building, and visualization. In this
+build, you will generate 1 tree: an mcleod tree, using sequences sampled from the sars-cov-2 pandemic."""
+
+"""Here, define your wildcards. To include more subtypes or gene segments, simply
+add those to these lists, separated by commas"""
+num_seqs = [50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 550, 600, 650, 700]
+trials = [1,2,3,4,5]
+
+##adding date here
+from datetime import date
+TODAYS_DATE = str(date.today())
+
+"""This rule tells Snakemake that at the end of the pipeline, you should have
+generated JSON files in the auspice folder for each subtype and segment."""
+rule all:
+    input:
+        expand(
+            "results/clusters_{num_seqs}_seqs_trial_{trials}/{date}_tipcounts_parsedon_TCstatus.tsv",
+            num_seqs=num_seqs,
+            trials=trials,
+            date=TODAYS_DATE
+        ),
+        "results/transitions_summary.tsv" 
+        
+# ##changing rule all to be the final output from new cluster rule
+        
+"""Specify all input files here. For this build, you'll start with input sequences
+from the data folder, which contain metadata information in the
+sequence header. Specify here files denoting specific strains to include or drop,
+references sequences, and files for auspice visualization (colors)"""
+
+rule files:
+    params:
+        mcleod_seqs_fasta = "data/mcleod_{num_seqs}_seqs_trial_{trials}.fasta", 
+        background_seqs_fasta = "data/background.fasta",
+        input_metadata = "data/2_8_more_greatermn_tc_om_meta.tsv",
+        reference = "config/reference.gb",
+        auspice_config = "config/auspice_config.json",
+        dropped_strains = "config/exclude_strains.txt",
+        colors = "config/colors.tsv",
+        date = TODAYS_DATE  # define this at the top of your Snakefile as: from datetime import date; TODAYS_DATE = str(date.today())
+
+
+
+files = rules.files.params
+
+
+# rule concatenate_fastas:
+#     message: "concatenating subsampled mcleod sequences with background sequences."
+#     input:
+#         mcleod_sequences = files.mcleod_seqs_fasta,
+#         background_sequences = files.background_seqs_fasta
+#     output:
+#         full_fasta = "results/mcleod-and-background-seqs_{num_seqs}_seqs_trial_{trials}.fasta"
+#     shell:
+#         """
+#         cat {input.mcleod_sequences} {input.background_sequences} > {output.full_fasta}
+#         """
+
+
+
+"""In this section of the Snakefile, rules are specified for each step of the pipeline.
+Each rule has inputs, outputs, parameters, and the specific text for the commands in
+bash. Rules reference each other, so altering one rule may require changing another
+if they depend on each other for inputs and outputs. Notes are included for
+specific rules."""
+
+#"""The parse rule is used to separate out sequences and metadata into 2 distinct
+#files. This rule assumes an input fasta file that contains metadata information
+#in the header. By specifying the order of those fields in the `fasta_fields` line,
+#`augur parse` will separate those fields into labeled columns in the output metadata
+#file."""
+#rule parse:
+#    message: "Parsing fasta into sequences and metadata"
+#    input:
+#        sequences = files.input_sequences
+#    output:
+#        sequences = "results/sequences.fasta",
+#        metadata = "results/metadata.tsv"
+#    params:
+#        fasta_fields =  "strain accession subtype date host country region species broad order",
+#        prettify_fields = "country host species region order"   # this just does some text cleaning to make these labels nicer to read
+#    shell:
+#        """
+#        augur parse \
+#            --sequences {input.sequences} \
+#            --output-sequences {output.sequences} \
+#            --output-metadata {output.metadata} \
+#            --fields {params.fasta_fields} \
+#            --prettify-fields {params.prettify_fields}
+#        """
+
+"""This rule specifies how to subsample data for the build, which is highly
+customizable based on your desired tree. A few notes on specifics on the
+subsampling arguments here:
+
+1. include: all strain names specified in this include file will be force included
+in the build.
+2. exclude: all strain names specified in this exclude file will be subsampled
+out of the build.
+3. min_date: sequences with collection dates before this time will be removed
+4. min_length: sequences with lengths less than this value will be removed
+5. group_by and sequences_per_group: these 2 arguments are used in conjunction with
+one another to set how many sequences should be sampled. Whichever columns you
+specify in group_by will be used to generate subsets of the data by those groups.
+For example, if you specify "year host", Nextstrain will generate 1 group per
+combation of year and host (e.g., "2000 dog", "2000 horse", "2001 dog", "2001 horse",
+etc...). Then, from each of those groups, it will sample, at random, the number
+of sequences specified in the "group_by" specification.
+
+"""
+
+# rule filter:
+#     message:
+#         """
+#         Filtering to
+#           - {params.max_sequences} sequence(s) per {params.group_by!s}
+#           - excluding strains in {input.exclude}
+#           - samples with missing region and country metadata
+#           - excluding strains prior to {params.min_date}
+#         """
+#     input:
+#         sequences = rules.concatenate_fastas.output.full_fasta,
+#         metadata = files.input_metadata,
+#         exclude = files.dropped_strains
+#     output:
+#         sequences = "results/filtered_{num_seqs}_seqs_trial_{trials}.fasta"
+#     params:
+#         group_by = "year",
+#         max_sequences = "20",
+#         min_date = "2020-01-01",
+#         min_length = "27000",
+#         exclude_where = "TC_status!='mcleod'"   
+#     shell:
+#         """
+#         augur filter \
+#             --sequences {input.sequences} \
+#             --metadata {input.metadata} \
+#             --exclude {input.exclude} \
+#             --output {output.sequences} \
+#             --group-by {params.group_by} \
+#             --subsample-max-sequences {params.max_sequences} \
+#             --min-date {params.min_date} \
+#             --exclude-where {params.exclude_where} \
+#             --min-length {params.min_length} \
+#             --non-nucleotide
+#         """
+        
+rule filter_nonMN:
+    message:
+        """
+        Filtering to
+          - {params.max_sequences} sequence(s) per {params.group_by!s}
+          - samples with missing region and country metadata
+          - excluding strains prior to {params.min_date}
+        """
+    input:
+        sequences = files.background_seqs_fasta,
+        metadata = files.input_metadata, 
+        exclude = files.dropped_strains
+    output:
+        sequences = "results/filtered_nonMN_{num_seqs}_seqs_trial_{trials}.fasta"
+    params:
+        group_by = "year",
+        max_sequences = "2000",
+        min_date = "2020",
+        min_length = "27000",
+        exclude_where = "TC_status!='non-MN'"
+    shell:
+        """
+        augur filter \
+            --sequences {input.sequences} \
+            --metadata {input.metadata} \
+            --exclude {input.exclude} \
+            --output {output.sequences} \
+            --group-by {params.group_by} \
+            --subsample-max-sequences {params.max_sequences} \
+            --min-date {params.min_date} \
+            --exclude-where {params.exclude_where} \
+            --min-length {params.min_length} \
+            --non-nucleotide
+        """
+        
+rule filter_greaterMN:
+    message:
+        """
+        Filtering to
+          - {params.max_sequences} sequence(s) per {params.group_by!s}
+          - samples with missing region and country metadata
+          - excluding strains prior to {params.min_date}
+        """
+    input:
+        sequences = files.background_seqs_fasta,
+        metadata = files.input_metadata, 
+        exclude = files.dropped_strains
+    output:
+        sequences = "results/filtered_greaterMN_{num_seqs}_seqs_trial_{trials}.fasta"
+    params:
+        group_by = "year",
+        max_sequences = "2000",
+        min_date = "2020",
+        min_length = "27000",
+        exclude_where = "TC_status!='greater-MN'"
+    shell:
+        """
+        augur filter \
+            --sequences {input.sequences} \
+            --metadata {input.metadata} \
+            --exclude {input.exclude} \
+            --output {output.sequences} \
+            --group-by {params.group_by} \
+            --subsample-max-sequences {params.max_sequences} \
+            --min-date {params.min_date} \
+            --exclude-where {params.exclude_where} \
+            --min-length {params.min_length} \
+            --non-nucleotide
+        """
+        
+rule filter_TC_county:
+    message:
+        """
+        Filtering to
+          - {params.max_sequences} sequence(s) per {params.group_by!s}
+          - samples with missing region and country metadata
+          - excluding strains prior to {params.min_date}
+        """
+    input:
+        sequences = files.background_seqs_fasta,
+        metadata = files.input_metadata, 
+        exclude = files.dropped_strains
+    output:
+        sequences = "results/filtered_TC_county_{num_seqs}_seqs_trial_{trials}.fasta"
+    params:
+        group_by = "year",
+        max_sequences = "2000",
+        min_date = "2020",
+        min_length = "27000",
+        exclude_where = "TC_status!='TC_county'"
+    shell:
+        """
+        augur filter \
+            --sequences {input.sequences} \
+            --metadata {input.metadata} \
+            --exclude {input.exclude} \
+            --output {output.sequences} \
+            --group-by {params.group_by} \
+            --subsample-max-sequences {params.max_sequences} \
+            --min-date {params.min_date} \
+            --exclude-where {params.exclude_where} \
+            --min-length {params.min_length} \
+            --non-nucleotide
+        """
+
+rule merge_filters:
+    message: "Merging McLeod, non-MN, TC_county, and greater-MN data."
+    input:
+        sequences = [rules.filter_nonMN.output.sequences, rules.filter_greaterMN.output.sequences, rules.filter_TC_county.output.sequences]
+    output: 
+        sequences = 'results/filtered_merged_{num_seqs}_seqs_trial_{trials}.fasta'
+    shell:
+        """
+        cat {input.sequences} > {output.sequences}
+
+        """
+
+rule concatenate_fastas:
+    message: "concatenating subsampled mcleod sequences with background sequences."
+    input:
+        mcleod_sequences = files.mcleod_seqs_fasta,
+        background_sequences = rules.merge_filters.output.sequences
+    output:
+        full_fasta = "results/mcleod-and-background-seqs_{num_seqs}_seqs_trial_{trials}.fasta"
+    shell:
+        """
+        cat {input.mcleod_sequences} {input.background_sequences} > {output.full_fasta}
+        """
+
+rule align:
+    message:
+        """
+        Aligning sequences to {input.reference}
+          - filling gaps with N
+        """
+    input:
+        sequences = rules.concatenate_fastas.output.full_fasta,
+        reference = files.reference
+    output:
+        alignment = "results/aligned_{num_seqs}_seqs_trial_{trials}.fasta"
+    shell:
+        """
+        augur align \
+            --sequences {input.sequences} \
+            --reference-sequence {input.reference} \
+            --output {output.alignment} \
+            --remove-reference \
+            --nthreads 1
+        """
+
+
+rule tree:
+    message: "Building tree"
+    input:
+        alignment = rules.align.output.alignment
+    output:
+        tree = "results/tree-raw_{num_seqs}_seqs_trial_{trials}.nwk"
+    params:
+        method = "iqtree"
+    shell:
+        """
+        augur tree \
+            --alignment {input.alignment} \
+            --output {output.tree} \
+            --method {params.method} \
+            --nthreads 1
+        """        
+
+
+# """Generate a time-resolved phylogeny using TreeTime"""
+# rule refine:
+#     message:
+#         """
+#         Refining tree
+#           - estimate timetree
+#           - use {params.coalescent} coalescent timescale
+#           - estimate {params.date_inference} node dates
+#         """
+# 	input:
+# 		tree = rules.tree.output.tree,
+#         alignment = rules.align.output,
+#         metadata = rules.parse.output.metadata
+#     output:
+#         tree = "results/tree.nwk",
+#         node_data = "results/branch-lengths.json"
+#     params:
+#         coalescent = "const",
+#         date_inference = "marginal",
+#         clock_filter_iqd = 4
+#     shell:
+#         """
+#         augur refine \
+#             --tree {input.tree} \
+#             --alignment {input.alignment} \
+#             --metadata {input.metadata} \
+#             --output-tree {output.tree} \
+#             --output-node-data {output.node_data} \
+#             --timetree \
+#             --coalescent {params.coalescent} \
+#             --date-confidence \
+#             --date-inference {params.date_inference} \
+#             --clock-filter-iqd {params.clock_filter_iqd}
+#         """
+
+rule refine:
+    message:
+        """
+        Refining tree
+          - estimate timetree
+          - use {params.coalescent} coalescent timescale
+          - estimate {params.date_inference} node dates
+        """
+    input:
+        tree = rules.tree.output.tree,
+        alignment = rules.align.output,
+        metadata = files.input_metadata
+    output:
+        tree = "results/tree_{num_seqs}_seqs_trial_{trials}.nwk",
+        node_data = "results/branch-lengths_{num_seqs}_seqs_trial_{trials}.json"
+    params:
+        coalescent = "const",
+        date_inference = "marginal",
+        clock_filter_iqd = 4
+    shell:
+        """
+        augur refine \
+            --tree {input.tree} \
+            --alignment {input.alignment} \
+            --metadata {input.metadata} \
+            --output-tree {output.tree} \
+            --output-node-data {output.node_data} \
+            --timetree \
+            --coalescent {params.coalescent} \
+            --date-confidence \
+            --date-inference {params.date_inference} \
+            --clock-filter-iqd {params.clock_filter_iqd}
+        """
+
+"""Reconstruct ancestral states onto each internal node using TreeTime"""
+rule ancestral:
+    message: "Reconstructing ancestral sequences and mutations"
+    input:
+        tree = rules.refine.output.tree,
+        alignment = rules.align.output
+    output:
+        node_data = "results/nt-muts_{num_seqs}_seqs_trial_{trials}.json"
+    params:
+        inference = "joint"
+    shell:
+        """
+        augur ancestral \
+            --tree {input.tree} \
+            --alignment {input.alignment} \
+            --output-node-data {output.node_data} \
+            --inference {params.inference}\
+            --keep-ambiguous
+        """
+
+rule translate:
+    message: "Translating amino acid sequences"
+    input:
+        tree = rules.refine.output.tree,
+        node_data = rules.ancestral.output.node_data,
+        reference = files.reference
+    output:
+        node_data = "results/aa-muts_{num_seqs}_seqs_trial_{trials}.json"
+    shell:
+        """
+        augur translate \
+            --tree {input.tree} \
+            --ancestral-sequences {input.node_data} \
+            --reference-sequence {input.reference} \
+            --output {output.node_data}
+        """
+
+rule traits:
+    message: "Inferring ancestral traits for {params.columns!s}"
+    input:
+        tree = rules.refine.output.tree,
+        metadata = files.input_metadata
+    output:
+        node_data = "results/traits_{num_seqs}_seqs_trial_{trials}.json",
+    params:
+        columns = "TC_status",
+    shell:
+        """
+        augur traits \
+            --tree {input.tree} \
+            --metadata {input.metadata} \
+            --output {output.node_data} \
+            --columns {params.columns} \
+            --confidence
+        """
+        
+# rule frequencies:
+#     message: "Calculating trait frequencies"
+#     input:
+#         metadata = files.input_metadata,
+#         tree = rules.refine.output.tree
+#     output:
+#         frequencies = "auspice/augur_freq_tip-frequencies_{num_seqs}_seqs_trial_{trials}.json"
+#     params:
+#         method = "kde",
+#         interval = 1,
+#         interval_units = "weeks"
+#     shell:
+#         """
+#         augur frequencies \
+#           --metadata {input.metadata} \
+#           --tree {input.tree} \
+#           --method {params.method} \
+#           --pivot-interval {params.interval} \
+#           --pivot-interval-units {params.interval_units} \
+#           --output {output.frequencies}
+#         """
+
+
+"""This rule exports the results of the pipeline into JSON format, which is required
+for visualization in auspice. To make changes to the categories of metadata
+that are colored, or how the data is visualized, alter the auspice_config files"""
+rule export:
+    message: "Exporting data files for for auspice"
+    input:
+        tree = rules.refine.output.tree,
+        metadata = files.input_metadata,
+        node_data = [rules.refine.output.node_data,rules.traits.output.node_data,rules.ancestral.output.node_data,rules.translate.output.node_data],
+        auspice_config = files.auspice_config,
+        colors = files.colors
+    output:
+        auspice_json = "auspice/3_4_wildcard_{num_seqs}_seqs_trial_{trials}.json"
+    shell:
+        """
+        augur export v2 \
+            --tree {input.tree} \
+            --metadata {input.metadata} \
+            --node-data {input.node_data}\
+            --auspice-config {input.auspice_config} \
+            --include-root-sequence \
+            --panels tree map entropy frequencies\
+            --colors {input.colors} \
+            --output {output.auspice_json}
+        """
+        
+rule cluster:
+    message: "Parsing TC subtrees and making clusters"
+    input:
+        json = "auspice/3_4_wildcard_{num_seqs}_seqs_trial_{trials}.json"
+    output:
+        transitions_plot = expand("results/clusters_{{num_seqs}}_seqs_trial_{{trials}}/{date}_transitions_plot.png", date=TODAYS_DATE),
+        transitions_tsv  = expand("results/clusters_{{num_seqs}}_seqs_trial_{{trials}}/{date}_transitions_parsedon_TCstatus.tsv", date=TODAYS_DATE),
+        totalinfo_csv    = expand("results/clusters_{{num_seqs}}_seqs_trial_{{trials}}/{date}_totalinfo_parsedon_TCstatus.csv", date=TODAYS_DATE),
+        tipcounts_tsv    = expand("results/clusters_{{num_seqs}}_seqs_trial_{{trials}}/{date}_tipcounts_parsedon_TCstatus.tsv", date=TODAYS_DATE)
+    params:
+        outdir = "results/clusters_{num_seqs}_seqs_trial_{trials}",
+        date   = TODAYS_DATE
+    shell:
+        """
+        python scripts/parse_tc_subtrees.py \
+            --json {input.json} \
+            --outdir {params.outdir} \
+            --date {params.date}
+        """
+        
+rule aggregate_transitions:
+    ##basically just inputing a teeny python script to merge these files into one summary
+    input:
+        expand(
+            "results/clusters_{num_seqs}_seqs_trial_{trials}/{date}_transitions_parsedon_TCstatus.tsv",
+            num_seqs=num_seqs,
+            trials=trials,
+            date=TODAYS_DATE
+        )
+    output:
+        "results/transitions_summary.tsv"
+    run:
+        import pandas as pd
+        dfs = []
+        for f in input:
+            df = pd.read_csv(f, sep="\t")
+            # extract num_seqs and trial from the path
+            parts = f.split("/")
+            folder = parts[1]  # e.g. "clusters_2_seqs_trial_3"
+            df["sample_id"] = folder.replace("clusters_", "")  # e.g. "2_seqs_trial_3"
+            dfs.append(df)
+        summary = pd.concat(dfs, ignore_index=True)
+        summary.to_csv(output[0], sep="\t", index=False) ##putting final csv in results
+rule clean:
+    message: "Removing directories: {params}"
+    params:
+        "results ",
+        "auspice"
+    shell:
+        "rm -rfv {params}"
