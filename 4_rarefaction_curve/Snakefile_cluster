@@ -1,0 +1,63 @@
+"""separate snakefile to run clusters rule from outputs from snakefile bc of baltic issues??"""
+
+from datetime import date
+
+TODAYS_DATE = str(date.today())
+num_seqs = [50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 550, 600, 650]
+trials = [1, 2, 3, 4, 5]
+
+rule all:
+    input:
+        expand(
+            "results/clusters_{num_seqs}_seqs_trial_{trials}/{date}_tipcounts_parsedon_TCstatus.tsv",
+            num_seqs=num_seqs,
+            trials=trials,
+            date=TODAYS_DATE
+        ),
+        "results/transitions_summary.tsv" 
+
+rule cluster:
+    message: "Parsing TC subtrees and making clusters"
+    input:
+        json = "auspice/3_4_wildcard_{num_seqs}_seqs_trial_{trials}.json"
+    output:
+        transitions_plot = expand("results/clusters_{{num_seqs}}_seqs_trial_{{trials}}/{date}_transitions_plot.png", date=TODAYS_DATE),
+        transitions_tsv  = expand("results/clusters_{{num_seqs}}_seqs_trial_{{trials}}/{date}_transitions_parsedon_TCstatus.tsv", date=TODAYS_DATE),
+        totalinfo_csv    = expand("results/clusters_{{num_seqs}}_seqs_trial_{{trials}}/{date}_totalinfo_parsedon_TCstatus.csv", date=TODAYS_DATE),
+        tipcounts_tsv    = expand("results/clusters_{{num_seqs}}_seqs_trial_{{trials}}/{date}_tipcounts_parsedon_TCstatus.tsv", date=TODAYS_DATE)
+    resources:
+        mem_mb=8000
+    params:
+        outdir = "results/clusters_{num_seqs}_seqs_trial_{trials}",
+        date   = TODAYS_DATE
+    shell:
+        """
+        python scripts/parse_tc_subtrees.py \
+            --json {input.json} \
+            --outdir {params.outdir} \
+            --date {params.date}
+        """
+        
+rule aggregate_transitions:
+    ##basically just inputing a teeny python script to merge these files into one summary
+    input:
+        expand(
+            "results/clusters_{num_seqs}_seqs_trial_{trials}/{date}_transitions_parsedon_TCstatus.tsv",
+            num_seqs=num_seqs,
+            trials=trials,
+            date=TODAYS_DATE
+        )
+    output:
+        "results/transitions_summary.tsv"
+    run:
+        import pandas as pd
+        dfs = []
+        for f in input:
+            df = pd.read_csv(f, sep="\t")
+            # extract num_seqs and trial from the path
+            parts = f.split("/")
+            folder = parts[1]  # e.g. "clusters_2_seqs_trial_3"
+            df["sample_id"] = folder.replace("clusters_", "")  # e.g. "2_seqs_trial_3"
+            dfs.append(df)
+        summary = pd.concat(dfs, ignore_index=True)
+        summary.to_csv(output[0], sep="\t", index=False) ##putting final csv in results
