@@ -56,6 +56,9 @@ Non-Minnesota sequences (n = 5,760): publicly available genomes from GISAID and 
 
 Due to the data use agreement with MDH, specific demographic information (age, vaccination status, geographic location) is not available in this public repository. Full metadata is available to authorized collaborators.
 
+Nextstrain Build Availability:
+https://nextstrain.org/groups/moncla-lab/sars2-mcleod/full-mcleod-build?c=Clade
+
 
 Citation
 If you use this code or data, please cite:
